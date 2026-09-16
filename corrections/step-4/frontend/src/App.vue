@@ -11,7 +11,9 @@ async function refresh() {
 }
 async function addTask() {
   if (!newTitle.value.trim()) return
-  await fetch(`/api/tasks?${new URLSearchParams({ title: newTitle.value })}`, { method: 'POST' })
+  await fetch(`/api/tasks?${new URLSearchParams({ title: newTitle.value })}`, {
+    method: 'POST'
+  })
   newTitle.value = ''
   await refresh()
 }

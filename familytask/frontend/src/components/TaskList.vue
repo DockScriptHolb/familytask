@@ -1,22 +1,34 @@
 <script setup>
+import { computed } from 'vue'
+
 // On décrit les propriétés attendues par le composant.
 // La liste des tâches et les profils arrivent depuis App.vue.
 const props = defineProps({
   tasks: {
     type: Array,
-    required: true
+    default: () => []
   },
   profiles: {
     type: Array,
-    required: true
+    default: () => []
   }
+})
+
+const orderedTasks = computed(() => {
+  const safeTasks = Array.isArray(props.tasks) ? props.tasks : []
+  return [...safeTasks].sort((a, b) => Number(Boolean(b?.urgent)) - Number(Boolean(a?.urgent)))
 })
 
 // On émet des événements vers App.vue.
 const emit = defineEmits(['toggle', 'remove'])
 
 function getProfileName(profileId) {
-  const profile = props.profiles.find(item => item.id === profileId)
+  if (profileId === null || profileId === undefined || profileId === '') {
+    return 'Quelqu’un'
+  }
+
+  const normalizedId = Number(profileId)
+  const profile = props.profiles.find(item => Number(item.id) === normalizedId || item.id === profileId)
   return profile ? profile.name : 'Quelqu’un'
 }
 
@@ -60,15 +72,15 @@ function getTaskIcon(title) {
 
 <template>
   <!-- Si la liste est vide, on affiche un message sympa. -->
-  <div v-if="tasks.length === 0" class="empty-list">
+  <div v-if="orderedTasks.length === 0" class="empty-list">
     <span class="empty-icon">🌤️</span>
-    <p>Plus rien à faire pour aujourd'hui 😉</p>
+    <p>Plus rien à faire pour aujourd'hui. Reposez vous ! </p>
   </div>
 
   <!-- La liste est maintenant affichée par ce composant dédié. -->
   <ul v-else class="task-list">
-    <li v-for="task in tasks" :key="task.id" class="task-item">
-      <div class="task-row">
+    <li v-for="task in orderedTasks" :key="task.id" class="task-item">
+      <div class="task-row" :class="{ 'task-urgent': Boolean(task.urgent) }">
         <label class="task-line">
           <!-- On coche la case et on signale à App.vue qu'il faut basculer done. -->
           <input type="checkbox" :checked="task.done" @change="emit('toggle', task.id)" />
