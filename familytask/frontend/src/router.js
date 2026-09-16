@@ -2,6 +2,8 @@ import { createRouter, createWebHistory } from 'vue-router'
 import Login from './views/Login.vue'
 import Signup from './views/Signup.vue'
 import TasksView from './views/TasksView.vue'
+import FamilyView from './views/FamilyView.vue'
+import { apiFetch } from './api'
 
 // Déclare les écrans publics et l'écran privé de la liste des tâches.
 const routes = [
@@ -13,6 +15,12 @@ const routes = [
     name: 'tasks',
     component: TasksView,
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/famille',
+    name: 'famille',
+    component: FamilyView,
+    meta: { requiresAuth: true, requiresAdmin: true }
   }
 ]
 
@@ -31,6 +39,13 @@ router.beforeEach((to) => {
 
   if ((to.name === 'login' || to.name === 'signup') && token) {
     return { name: 'tasks' }
+  }
+
+  if (to.meta.requiresAdmin) {
+    return apiFetch('/api/me').then(response => {
+      if (!response.ok) return { name: 'tasks' }
+      return response.json().then(member => member.is_admin ? true : { name: 'tasks' })
+    })
   }
 
   return true

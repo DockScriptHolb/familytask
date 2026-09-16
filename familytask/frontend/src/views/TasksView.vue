@@ -1,23 +1,40 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import TaskList from '../components/TaskList.vue'
+import { apiFetch } from '../api'
 
 const tasks = ref([])
 const newTaskTitle = ref('')
 const newTaskDate = ref('')
 const urgentTask = ref(false)
 const errorMessage = ref('')
-const darkMode = ref(false)
+const isAdmin = ref(false)
+const familyMembers = ref([])
+const assigneeId = ref('')
+const currentMemberId = ref(null)
 
-// Ajoute le token de session aux appels qui concernent les tâches.
-function authHeaders() {
-  const token = localStorage.getItem('token')
-  return token ? { Authorization: `Bearer ${token}` } : {}
+// Charge le membre connecté pour savoir s'il est admin.
+async function loadCurrentMember() {
+  const response = await apiFetch('/api/me')
+  if (!response.ok) return
+  const member = await response.json()
+  isAdmin.value = Boolean(member.is_admin)
+  currentMemberId.value = member.id
+}
+
+// Charge tous les membres de la famille pour le menu d'assignation.
+async function loadFamilyMembers() {
+  const response = await apiFetch('/api/members')
+  if (!response.ok) return
+  const data = await response.json()
+  const members = Array.isArray(data) ? data : []
+  familyMembers.value = members.filter(familyMember => familyMember.id !== currentMemberId.value)
+  assigneeId.value = familyMembers.value.length ? String(familyMembers.value[0].id) : ''
 }
 
 // Charge les tâches enregistrées dans la base de données.
 async function refresh() {
-  const response = await fetch('/api/tasks', { headers: authHeaders() })
+  const response = await apiFetch('/api/tasks')
   if (!response.ok) {
     throw new Error('Impossible de charger les tâches')
   }
@@ -33,16 +50,17 @@ async function addTask() {
   errorMessage.value = ''
   const params = new URLSearchParams({ title, urgent: String(urgentTask.value) })
   if (newTaskDate.value) params.set('scheduled_date', newTaskDate.value)
+  if (isAdmin.value && assigneeId.value) params.set('member_id', assigneeId.value)
 
   try {
-    const response = await fetch(`/api/tasks?${params.toString()}`, {
-      method: 'POST',
-      headers: authHeaders()
+    const response = await apiFetch(`/api/tasks?${params.toString()}`, {
+      method: 'POST'
     })
     if (!response.ok) throw new Error('Impossible d’ajouter la tâche')
     newTaskTitle.value = ''
     newTaskDate.value = ''
     urgentTask.value = false
+    assigneeId.value = familyMembers.value.length ? String(familyMembers.value[0].id) : ''
     await refresh()
   } catch {
     errorMessage.value = 'Impossible d’ajouter la tâche. Réessayez.'
@@ -51,7 +69,7 @@ async function addTask() {
 
 // Inverse l'état terminé d'une tâche.
 async function toggleTask(id) {
-  const response = await fetch(`/api/tasks/${id}`, { method: 'PATCH', headers: authHeaders() })
+  const response = await apiFetch(`/api/tasks/${id}`, { method: 'PATCH' })
   if (!response.ok) {
     errorMessage.value = 'Impossible de modifier la tâche.'
     return
@@ -61,7 +79,7 @@ async function toggleTask(id) {
 
 // Supprime une tâche après l'action demandée par la liste.
 async function deleteTask(id) {
-  const response = await fetch(`/api/tasks/${id}`, { method: 'DELETE', headers: authHeaders() })
+  const response = await apiFetch(`/api/tasks/${id}`, { method: 'DELETE' })
   if (!response.ok) {
     errorMessage.value = 'Impossible de supprimer la tâche.'
     return
@@ -95,14 +113,10 @@ async function selectSuggestion(suggestion) {
   await addTask()
 }
 
-function toggleDarkMode() {
-  darkMode.value = !darkMode.value
-}
-
-watch(darkMode, value => document.body.classList.toggle('dark-mode', value))
-
 onMounted(async () => {
   try {
+    await loadCurrentMember()
+    if (isAdmin.value) await loadFamilyMembers()
     await refresh()
   } catch {
     errorMessage.value = 'Impossible de charger les tâches. Réessayez.'
@@ -111,16 +125,6 @@ onMounted(async () => {
 </script>
 
 <template>
-  <header class="app-header">
-    <div class="header-content">
-      <span class="brand-badge" aria-label="FamilyTask">FT</span>
-      <h1>FamilyTask</h1>
-      <button class="theme-toggle" type="button" @click="toggleDarkMode">
-        {{ darkMode ? '☀️ Clair' : '🌙 Sombre' }}
-      </button>
-    </div>
-  </header>
-
   <main>
     <section class="app-layout">
       <div class="card">
@@ -153,11 +157,19 @@ onMounted(async () => {
             </div>
           </div>
           <input v-model="newTaskDate" type="date" class="task-date-input" aria-label="Date de programmation" />
+          <label v-if="isAdmin && familyMembers.length" class="assignee-control">
+            <span class="assignee-label"><span class="assignee-icon">↗</span>Attribuer à</span>
+            <select v-model="assigneeId" class="assignee-select" aria-label="Attribuer à un membre">
+              <option v-for="familyMember in familyMembers" :key="familyMember.id" :value="String(familyMember.id)">
+                {{ familyMember.name }}
+              </option>
+            </select>
+          </label>
           <button type="button" @click="addTask">Ajouter</button>
         </div>
 
         <p v-if="errorMessage" class="auth-error" role="alert">{{ errorMessage }}</p>
-        <TaskList :tasks="tasks" @toggle="toggleTask" @remove="deleteTask" />
+        <TaskList :tasks="tasks" :current-member-id="currentMemberId" @toggle="toggleTask" @remove="deleteTask" />
       </div>
     </section>
   </main>

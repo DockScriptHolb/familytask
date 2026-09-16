@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Optional
 
 # Importe les classes FastAPI nécessaires pour créer l'API, gérer les dépendances et renvoyer des erreurs HTTP.
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # Importe le middleware CORS pour autoriser les requêtes du frontend vers le backend.
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,6 +73,21 @@ class Member(SQLModel, table=True):
     # Stocke le jeton associé au membre, ou une chaîne vide après déconnexion.
     token: str = ''
 
+    # Stocke l'avatar du membre (URL ou image encodée en base64), vide si non défini.
+    avatar: Optional[str] = None
+
+
+# Déclare la table Lien qui représente les libellés de parenté propres à chaque famille.
+class Lien(SQLModel, table=True):
+    # Déclare l'identifiant entier du lien, clé primaire et auto-généré par SQLite.
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Indexe le code familial pour ne récupérer que les liens propres à une famille.
+    family_code: str = Field(index=True)
+
+    # Stocke le libellé du lien de parenté (ex : "Père", "Tante").
+    label: str
+
 
 # Calcule et renvoie le hash SHA-256 d'un mot de passe fourni en texte.
 def hash_password(pw: str) -> str:
@@ -92,6 +108,30 @@ class SignupRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+# Décrit les données attendues lors de l'ajout d'un membre par un administrateur.
+class MemberCreateRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+    lien: str
+    is_admin: bool = False
+
+
+# Décrit les données attendues lors de la mise à jour des droits d'un membre.
+class MemberUpdateRequest(BaseModel):
+    is_admin: bool
+
+
+# Décrit les données attendues lors de l'ajout d'un lien de parenté.
+class LienCreateRequest(BaseModel):
+    label: str
+
+
+# Décrit les données attendues lors de la mise à jour de l'avatar du membre connecté.
+class AvatarUpdateRequest(BaseModel):
+    avatar: str
 
 
 # Définit le chemin absolu de la base SQLite dans le dossier du backend.
@@ -135,6 +175,13 @@ def create_db_and_tables():
             connection.exec_driver_sql("ALTER TABLE task ADD COLUMN member_id INTEGER")
         connection.commit()
 
+        # Ajoute la colonne d'avatar aux bases créées avant cette fonctionnalité.
+        member_columns = connection.exec_driver_sql("PRAGMA table_info(member)").fetchall()
+        member_column_names = {column[1] for column in member_columns}
+        if "avatar" not in member_column_names:
+            connection.exec_driver_sql("ALTER TABLE member ADD COLUMN avatar VARCHAR")
+        connection.commit()
+
 
 # Crée immédiatement les tables au chargement du module pour éviter les erreurs de table absente avant le premier appel.
 create_db_and_tables()
@@ -154,17 +201,21 @@ def public_member(member: Member) -> dict:
     return member.model_dump(exclude={'password_hash'})
 
 
+# Déclare la sécurité Bearer pour que Swagger ajoute automatiquement le préfixe.
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
 # Retrouve le membre associé au token Bearer envoyé dans l'en-tête Authorization.
 def current_member(
-    authorization: Optional[str] = Header(default=None),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     session: Session = Depends(get_session),
 ) -> Member:
-    # Vérifie que l'en-tête respecte le format standard "Bearer <token>".
-    if not authorization or not authorization.lower().startswith('bearer '):
+    # Le schéma HTTPBearer sépare déjà le préfixe Bearer de sa valeur.
+    if credentials is None:
         raise HTTPException(status_code=401, detail='Authentification requise')
 
-    # Récupère uniquement la valeur du token après le préfixe Bearer.
-    token = authorization[7:].strip()
+    # Récupère uniquement la valeur du token saisie dans Swagger.
+    token = credentials.credentials.strip()
     member = session.exec(select(Member).where(Member.token == token)).first()
 
     # Refuse les tokens absents, vides ou inconnus.
@@ -287,6 +338,22 @@ def me(member: Member = Depends(current_member)):
     return public_member(member)
 
 
+# Déclare la route qui met à jour l'avatar du membre connecté.
+@app.patch('/api/me/avatar')
+def update_avatar(
+    data: AvatarUpdateRequest,
+    member: Member = Depends(current_member),
+    session: Session = Depends(get_session),
+):
+    stored_member = session.get(Member, member.id)
+    stored_member.avatar = data.avatar
+    session.add(stored_member)
+    session.commit()
+    session.refresh(stored_member)
+
+    return public_member(stored_member)
+
+
 # Déclare la route qui invalide le token de session courant.
 @app.post('/api/logout')
 def logout(member: Member = Depends(current_member), session: Session = Depends(get_session)):
@@ -298,6 +365,155 @@ def logout(member: Member = Depends(current_member), session: Session = Depends(
 
     # Confirme la fermeture de la session au client.
     return {'ok': True, 'message': 'Déconnexion réussie'}
+
+
+# Déclare la route qui liste les membres de la famille du membre connecté.
+@app.get('/api/members')
+def list_members(member: Member = Depends(current_member), session: Session = Depends(get_session)):
+    family_members = session.exec(select(Member).where(Member.family_code == member.family_code)).all()
+    return [public_member(m) for m in family_members]
+
+
+# Déclare la route qui permet à un administrateur d'ajouter un membre à sa famille.
+@app.post('/api/members')
+def add_member(
+    data: Optional[MemberCreateRequest] = Body(default=None),
+    email: Optional[str] = None,
+    password: Optional[str] = None,
+    name: Optional[str] = None,
+    lien: Optional[str] = None,
+    is_admin: bool = False,
+    member: Member = Depends(current_member),
+    session: Session = Depends(get_session),
+):
+    if not member.is_admin:
+        raise HTTPException(status_code=403, detail="Seul un administrateur peut créer un compte")
+
+    # Accepte aussi les paramètres d'URL pour rester compatible avec les routes existantes.
+    data = data or MemberCreateRequest(
+        email=email or '',
+        password=password or '',
+        name=name or '',
+        lien=lien or '',
+        is_admin=is_admin,
+    )
+
+    new_email = data.email.strip().lower()
+    if not new_email or not data.password or not data.name.strip() or not data.lien.strip():
+        raise HTTPException(status_code=422, detail='Les informations sont incomplètes')
+
+    existing_member = session.exec(select(Member).where(Member.email == new_email)).first()
+    if existing_member is not None:
+        raise HTTPException(status_code=409, detail='Cette adresse email est déjà utilisée')
+
+    new_member = Member(
+        email=new_email,
+        name=data.name.strip(),
+        lien=data.lien.strip(),
+        is_admin=data.is_admin,
+        family_code=member.family_code,
+        password_hash=hash_password(data.password),
+    )
+
+    session.add(new_member)
+    session.commit()
+    session.refresh(new_member)
+
+    return public_member(new_member)
+
+
+# Déclare la route qui permet à un administrateur de promouvoir ou rétrograder un membre.
+@app.patch('/api/members/{member_id}')
+def update_member(
+    member_id: int,
+    data: Optional[MemberUpdateRequest] = Body(default=None),
+    is_admin: Optional[bool] = None,
+    member: Member = Depends(current_member),
+    session: Session = Depends(get_session),
+):
+    if not member.is_admin:
+        raise HTTPException(status_code=403, detail="Seul un administrateur peut modifier les droits")
+
+    data = data if data is not None else (MemberUpdateRequest(is_admin=is_admin) if is_admin is not None else None)
+    if data is None:
+        raise HTTPException(status_code=422, detail="Le champ is_admin est requis")
+
+    target_member = session.get(Member, member_id)
+    if target_member is None or target_member.family_code != member.family_code:
+        raise HTTPException(status_code=404, detail="Membre introuvable dans votre famille")
+
+    if target_member.id == member.id and not data.is_admin:
+        raise HTTPException(status_code=400, detail="Vous ne pouvez pas retirer vos propres droits admin")
+
+    target_member.is_admin = data.is_admin
+    session.add(target_member)
+    session.commit()
+    session.refresh(target_member)
+
+    return public_member(target_member)
+
+
+# Déclare la route qui permet à un administrateur de supprimer un membre et ses tâches.
+@app.delete('/api/members/{member_id}')
+def delete_member(
+    member_id: int,
+    member: Member = Depends(current_member),
+    session: Session = Depends(get_session),
+):
+    if not member.is_admin:
+        raise HTTPException(status_code=403, detail="Seul un administrateur peut supprimer un compte")
+
+    # Interdit à un administrateur de supprimer son propre compte.
+    if member_id == member.id:
+        raise HTTPException(status_code=400, detail="Vous ne pouvez pas supprimer votre propre compte")
+
+    target_member = session.get(Member, member_id)
+    if target_member is None or target_member.family_code != member.family_code:
+        raise HTTPException(status_code=404, detail="Membre introuvable dans votre famille")
+
+    # Supprime d'abord les tâches du membre pour respecter la contrainte de clé étrangère.
+    member_tasks = session.exec(select(Task).where(Task.member_id == target_member.id)).all()
+    for task in member_tasks:
+        session.delete(task)
+
+    session.delete(target_member)
+    session.commit()
+
+    return {'ok': True}
+
+
+# Déclare la route qui liste les liens de parenté propres à la famille du membre connecté.
+@app.get('/api/liens')
+def list_liens(member: Member = Depends(current_member), session: Session = Depends(get_session)):
+    liens = session.exec(select(Lien).where(Lien.family_code == member.family_code)).all()
+    return [lien.label for lien in liens]
+
+
+# Déclare la route qui ajoute un nouveau lien de parenté à la famille du membre connecté.
+@app.post('/api/liens')
+def add_lien(
+    data: Optional[LienCreateRequest] = Body(default=None),
+    label: Optional[str] = None,
+    member: Member = Depends(current_member),
+    session: Session = Depends(get_session),
+):
+    # Accepte aussi le paramètre d'URL pour rester compatible avec les routes existantes.
+    data = data or LienCreateRequest(label=label or '')
+    clean_label = data.label.strip()
+
+    if not clean_label:
+        raise HTTPException(status_code=422, detail='Le libellé du lien ne peut pas être vide')
+
+    # Évite les doublons de libellé au sein d'une même famille.
+    existing_lien = session.exec(
+        select(Lien).where(Lien.family_code == member.family_code, Lien.label == clean_label)
+    ).first()
+
+    if existing_lien is None:
+        session.add(Lien(family_code=member.family_code, label=clean_label))
+        session.commit()
+
+    return list_liens(member, session)
 
 
 # Déclare une route GET pour lister les tâches du membre connecté.

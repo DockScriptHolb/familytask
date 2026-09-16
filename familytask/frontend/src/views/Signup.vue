@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { apiFetch, setToken } from '../api'
 
 const router = useRouter()
 const family = ref('')
@@ -25,7 +26,7 @@ async function submitSignup() {
   isSubmitting.value = true
 
   try {
-    const response = await fetch('/api/signup', {
+    const response = await apiFetch('/api/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -43,7 +44,7 @@ async function submitSignup() {
       return
     }
 
-    localStorage.setItem('token', data.token)
+    setToken(data.token)
     await router.push({ name: 'tasks' })
   } catch {
     errorMessage.value = 'Le serveur est inaccessible. Réessayez plus tard.'

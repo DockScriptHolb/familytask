@@ -11,6 +11,10 @@ const props = defineProps({
   profiles: {
     type: Array,
     default: () => []
+  },
+  currentMemberId: {
+    type: [Number, String],
+    default: null
   }
 })
 
@@ -53,6 +57,11 @@ function getTaskDate(task) {
   return task?.scheduledDate || task?.scheduled_date || ''
 }
 
+// Une tâche assignée au membre connecté ressort visuellement des autres.
+function isMine(task) {
+  return props.currentMemberId !== null && Number(task?.member_id) === Number(props.currentMemberId)
+}
+
 function getTaskIcon(title) {
   const normalized = String(title || '').toLowerCase()
 
@@ -80,7 +89,7 @@ function getTaskIcon(title) {
   <!-- La liste est maintenant affichée par ce composant dédié. -->
   <ul v-else class="task-list">
     <li v-for="task in orderedTasks" :key="task.id" class="task-item">
-      <div class="task-row" :class="{ 'task-urgent': Boolean(task.urgent) }">
+      <div class="task-row" :class="{ 'task-urgent': Boolean(task.urgent), 'task-mine': isMine(task) }">
         <label class="task-line">
           <!-- On coche la case et on signale à App.vue qu'il faut basculer done. -->
           <input type="checkbox" :checked="task.done" @change="emit('toggle', task.id)" />
