@@ -3,6 +3,7 @@ import Login from './views/Login.vue'
 import Signup from './views/Signup.vue'
 import TasksView from './views/TasksView.vue'
 import FamilyView from './views/FamilyView.vue'
+import AssistantView from './views/AssistantView.vue'
 import { apiFetch } from './api'
 
 // Déclare les écrans publics et l'écran privé de la liste des tâches.
@@ -21,6 +22,12 @@ const routes = [
     name: 'famille',
     component: FamilyView,
     meta: { requiresAuth: true, requiresAdmin: true }
+  },
+  {
+    path: '/assistant',
+    name: 'assistant',
+    component: AssistantView,
+    meta: { requiresAuth: true }
   }
 ]
 

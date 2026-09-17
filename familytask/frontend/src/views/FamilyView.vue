@@ -29,7 +29,6 @@ const newEmail = ref('')
 const newPassword = ref('')
 const newName = ref('')
 const newLien = ref('')
-const newLienLabel = ref('')
 const newIsAdmin = ref(false)
 const isSubmitting = ref(false)
 
@@ -125,25 +124,6 @@ async function createMember() {
   }
 }
 
-// Ajoute un nouveau lien disponible pour toute la famille.
-async function addLien() {
-  const label = newLienLabel.value.trim()
-  if (!label) return
-
-  const response = await apiFetch('/api/liens', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label })
-  })
-  const data = await response.json().catch(() => [])
-  if (!response.ok) {
-    errorMessage.value = data.detail || 'Impossible d’ajouter ce lien.'
-    return
-  }
-  liens.value = [...new Set([...defaultLiens, ...data])]
-  newLienLabel.value = ''
-}
-
 // Supprime un membre après confirmation explicite et recharge ses tâches.
 async function deleteMember(targetMember) {
   if (!window.confirm(`Supprimer le compte de ${targetMember.name} et ses tâches ?`)) return
@@ -155,6 +135,19 @@ async function deleteMember(targetMember) {
     return
   }
   await Promise.all([loadMembers(), loadFamilyTasks()])
+}
+
+// Supprime la tâche d'un membre de la famille, réservé aux administrateurs.
+async function deleteFamilyTask(task) {
+  if (!window.confirm(`Supprimer la tâche « ${task.title} » ?`)) return
+
+  const response = await apiFetch(`/api/tasks/${task.id}`, { method: 'DELETE' })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    errorMessage.value = data.detail || 'Impossible de supprimer cette tâche.'
+    return
+  }
+  await loadFamilyTasks()
 }
 
 // Promeut ou rétrograde un membre en inversant son statut admin.
@@ -222,14 +215,6 @@ onMounted(async () => {
         </button>
       </form>
 
-      <form class="lien-form" @submit.prevent="addLien">
-        <label class="auth-label">
-          <span>Ajouter un lien de parenté</span>
-          <input v-model="newLienLabel" type="text" placeholder="Cousine" />
-        </label>
-        <button type="submit">Ajouter le lien</button>
-      </form>
-
       <p v-if="errorMessage" class="auth-error" role="alert">{{ errorMessage }}</p>
 
       <h2>Membres de la famille</h2>
@@ -237,7 +222,8 @@ onMounted(async () => {
         <li v-for="familyMember in members" :key="familyMember.id" class="task-item">
           <div class="task-row">
             <span class="family-avatar" :style="{ backgroundColor: avatarColor(familyMember.name) }">
-              {{ familyMember.name.charAt(0).toUpperCase() }}
+              <img v-if="familyMember.avatar" :src="familyMember.avatar" alt="" class="family-avatar-image" />
+              <template v-else>{{ familyMember.name.charAt(0).toUpperCase() }}</template>
             </span>
             <span class="member-details">
               <strong>{{ familyMember.name }}</strong>
@@ -256,6 +242,9 @@ onMounted(async () => {
         <li v-for="task in familyTasks" :key="task.id" class="task-row">
           <span :class="{ done: task.done }">{{ task.title }}</span>
           <span class="task-assignee">{{ memberName(task.member_id) }}</span>
+          <button type="button" class="danger-button" @click="deleteFamilyTask(task)">
+            Supprimer
+          </button>
         </li>
       </ul>
       <p v-else class="empty-list">Aucune tâche dans la famille.</p>

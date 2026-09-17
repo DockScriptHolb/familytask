@@ -20,7 +20,15 @@ const props = defineProps({
 
 const orderedTasks = computed(() => {
   const safeTasks = Array.isArray(props.tasks) ? props.tasks : []
-  return [...safeTasks].sort((a, b) => Number(Boolean(b?.urgent)) - Number(Boolean(a?.urgent)))
+  return [...safeTasks].sort((a, b) => {
+    // Les tâches terminées passent toujours en fin de liste, quel que soit leur niveau d'urgence.
+    const doneDiff = Number(Boolean(a?.done)) - Number(Boolean(b?.done))
+    if (doneDiff !== 0) return doneDiff
+
+    const urgentA = Number(Boolean(a?.urgent) || isDueSoon(a))
+    const urgentB = Number(Boolean(b?.urgent) || isDueSoon(b))
+    return urgentB - urgentA
+  })
 })
 
 // On émet des événements vers App.vue.
@@ -57,6 +65,40 @@ function getTaskDate(task) {
   return task?.scheduledDate || task?.scheduled_date || ''
 }
 
+// Une tâche non terminée dont la deadline est dépassée doit ressortir comme étant en retard.
+function isOverdue(task) {
+  if (task?.done) return false
+
+  const dateValue = getTaskDate(task)
+  if (!dateValue) return false
+
+  const deadline = new Date(dateValue)
+  if (Number.isNaN(deadline.getTime())) return false
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  deadline.setHours(0, 0, 0, 0)
+
+  return deadline.getTime() < today.getTime()
+}
+
+// Une tâche non terminée devient urgente automatiquement quand il reste moins de 24h avant la deadline.
+function isDueSoon(task) {
+  if (task?.done) return false
+
+  const dateValue = getTaskDate(task)
+  if (!dateValue) return false
+
+  const deadline = new Date(dateValue)
+  if (Number.isNaN(deadline.getTime())) return false
+
+  // La deadline compte jusqu'à la fin de sa journée, faute d'heure précise saisie.
+  deadline.setHours(23, 59, 59, 999)
+  const msRemaining = deadline.getTime() - Date.now()
+
+  return msRemaining >= 0 && msRemaining <= 24 * 60 * 60 * 1000
+}
+
 // Une tâche assignée au membre connecté ressort visuellement des autres.
 function isMine(task) {
   return props.currentMemberId !== null && Number(task?.member_id) === Number(props.currentMemberId)
@@ -89,7 +131,7 @@ function getTaskIcon(title) {
   <!-- La liste est maintenant affichée par ce composant dédié. -->
   <ul v-else class="task-list">
     <li v-for="task in orderedTasks" :key="task.id" class="task-item">
-      <div class="task-row" :class="{ 'task-urgent': Boolean(task.urgent), 'task-mine': isMine(task) }">
+      <div class="task-row" :class="{ 'task-urgent': Boolean(task.urgent) || isDueSoon(task), 'task-mine': isMine(task), 'task-overdue': isOverdue(task) }">
         <label class="task-line">
           <!-- On coche la case et on signale à App.vue qu'il faut basculer done. -->
           <input type="checkbox" :checked="task.done" @change="emit('toggle', task.id)" />
@@ -112,6 +154,9 @@ function getTaskIcon(title) {
               </span>
               <span v-if="getTaskDate(task)" class="task-meta-date small-date">
                 {{ formatDate(getTaskDate(task)) }}
+              </span>
+              <span v-if="isOverdue(task)" class="task-meta-overdue">
+                ⏰ En retard
               </span>
             </span>
 

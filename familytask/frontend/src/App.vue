@@ -10,6 +10,29 @@ const memberAvatar = ref('')
 const isAdmin = ref(false)
 const darkMode = ref(localStorage.getItem('darkMode') === 'true')
 const avatarInput = ref(null)
+const showAvatarMenu = ref(false)
+
+// Propose des avatars prêts à l'emploi (emoji sur fond coloré) sans avoir à importer de photo.
+const avatarPresets = [
+  { emoji: '😀', color: '#ef6f6c' },
+  { emoji: '😎', color: '#4f8dff' },
+  { emoji: '🥸', color: '#39a96b' },
+  { emoji: '🐱', color: '#e0a458' },
+  { emoji: '🐶', color: '#9b72cf' },
+  { emoji: '🦊', color: '#0fa3b1' },
+  { emoji: '🐼', color: '#f2789f' },
+  { emoji: '🦁', color: '#8b6b4a' },
+  { emoji: '🦄', color: '#c084fc' },
+  { emoji: '🌟', color: '#f5a623' },
+  { emoji: '⚽', color: '#2f9e44' },
+  { emoji: '🎨', color: '#e8590c' }
+]
+
+// Fabrique une petite image SVG (emoji sur cercle coloré) encodée en data URL.
+function buildPresetAvatar(preset) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="${preset.color}"/><text x="32" y="40" font-size="32" text-anchor="middle">${preset.emoji}</text></svg>`
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+}
 
 // Récupère le prénom du membre connecté pour la barre de navigation.
 async function loadCurrentMember() {
@@ -44,9 +67,31 @@ async function loadCurrentMember() {
   }
 }
 
-// Ouvre le sélecteur de fichier quand on clique sur l'avatar.
+// Ouvre ou ferme le menu de propositions d'avatars.
+function toggleAvatarMenu() {
+  showAvatarMenu.value = !showAvatarMenu.value
+}
+
+// Ouvre le sélecteur de fichier pour importer une photo personnelle.
 function openAvatarPicker() {
+  showAvatarMenu.value = false
   avatarInput.value?.click()
+}
+
+// Enregistre directement l'avatar préenregistré choisi.
+async function selectPresetAvatar(preset) {
+  const response = await apiFetch('/api/me/avatar', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ avatar: buildPresetAvatar(preset) })
+  })
+
+  if (response.ok) {
+    const member = await response.json()
+    memberAvatar.value = member.avatar || ''
+  }
+
+  showAvatarMenu.value = false
 }
 
 // Encode l'image choisie en base64 puis l'envoie au backend.
@@ -103,10 +148,30 @@ watch(() => route.name, loadCurrentMember, { immediate: true })
   <div class="app-frame" :class="{ 'private-frame': route.meta.requiresAuth }">
     <header v-if="route.meta.requiresAuth" class="account-bar">
       <div class="account-identity">
-        <button type="button" class="avatar-button" title="Changer l'avatar" @click="openAvatarPicker">
-          <img v-if="memberAvatar" :src="memberAvatar" alt="Avatar" class="avatar-image" />
-          <span v-else class="avatar-placeholder">{{ (memberName || '?').charAt(0).toUpperCase() }}</span>
-        </button>
+        <div class="avatar-wrapper">
+          <button type="button" class="avatar-button" title="Changer l'avatar" @click="toggleAvatarMenu">
+            <img v-if="memberAvatar" :src="memberAvatar" alt="Avatar" class="avatar-image" />
+            <span v-else class="avatar-placeholder">{{ (memberName || '?').charAt(0).toUpperCase() }}</span>
+          </button>
+          <div v-if="showAvatarMenu" class="avatar-menu">
+            <p class="avatar-menu-title">Choisir un avatar</p>
+            <div class="avatar-presets">
+              <button
+                v-for="preset in avatarPresets"
+                :key="preset.emoji"
+                type="button"
+                class="avatar-preset"
+                :style="{ backgroundColor: preset.color }"
+                @click="selectPresetAvatar(preset)"
+              >
+                {{ preset.emoji }}
+              </button>
+            </div>
+            <button type="button" class="avatar-menu-upload" @click="openAvatarPicker">
+              Importer une photo
+            </button>
+          </div>
+        </div>
         <input ref="avatarInput" type="file" accept="image/*" class="avatar-input" @change="updateAvatar" />
         <span class="account-greeting"><small>Bonjour</small>{{ memberName || 'à vous' }}</span>
       </div>
@@ -123,6 +188,7 @@ watch(() => route.name, loadCurrentMember, { immediate: true })
     <!-- La navigation reste visible en bas de chaque écran privé. -->
     <nav v-if="route.meta.requiresAuth" class="bottom-tabs" aria-label="Navigation principale">
       <RouterLink to="/tasks" class="bottom-tab" active-class="active"><span>✓</span>Tâches</RouterLink>
+      <RouterLink to="/assistant" class="bottom-tab" active-class="active"><span>🤖</span>Assistant</RouterLink>
       <RouterLink v-if="isAdmin" to="/famille" class="bottom-tab" active-class="active"><span>♧</span>Famille</RouterLink>
     </nav>
   </div>

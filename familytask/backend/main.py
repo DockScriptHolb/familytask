@@ -4,11 +4,20 @@ import hashlib
 # Importe hmac pour comparer les hash sans divulguer d'information temporelle.
 import hmac
 
+# Importe json pour décoder les arguments des tool_calls renvoyés par l'assistant IA.
+import json
+
 # Importe secrets pour générer des codes familiaux et des tokens imprévisibles.
 import secrets
 
 # Importe le système de fichiers pour gérer le chemin de la base et ses permissions.
 import os
+
+# Importe datetime pour générer les dates et l'horodatage du flux de calendrier.
+from datetime import datetime, timedelta
+
+# Importe httpx pour appeler l'API GitHub Models de manière asynchrone.
+import httpx
 
 # Importe le type Optionnel pour autoriser l'ID à être absent lors de la création d'une tâche.
 from pathlib import Path
@@ -16,6 +25,7 @@ from typing import Optional
 
 # Importe les classes FastAPI nécessaires pour créer l'API, gérer les dépendances et renvoyer des erreurs HTTP.
 from fastapi import Body, Depends, FastAPI, HTTPException
+from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 # Importe le middleware CORS pour autoriser les requêtes du frontend vers le backend.
@@ -132,6 +142,11 @@ class LienCreateRequest(BaseModel):
 # Décrit les données attendues lors de la mise à jour de l'avatar du membre connecté.
 class AvatarUpdateRequest(BaseModel):
     avatar: str
+
+
+# Décrit le message envoyé à l'assistant IA.
+class AssistantRequest(BaseModel):
+    message: str
 
 
 # Définit le chemin absolu de la base SQLite dans le dossier du backend.
@@ -639,3 +654,142 @@ def delete_task(
 
     # Renvoie un message simple de confirmation au frontend.
     return {"ok": True}
+
+
+# Déclare une route POST pour interroger l'assistant IA à partir d'un message utilisateur.
+@app.post('/api/assistant')
+async def ask_assistant(
+    data: Optional[AssistantRequest] = Body(default=None),
+    message: Optional[str] = None,
+    member: Member = Depends(current_member),
+    session: Session = Depends(get_session),
+):
+    # Accepte aussi le paramètre d'URL pour rester compatible avec les routes existantes.
+    data = data or AssistantRequest(message=message or '')
+
+    if not data.message.strip():
+        raise HTTPException(status_code=422, detail='Le message ne peut pas être vide')
+
+    # Repère, sur le message brut, un lien de parenté (ex : "fille") partagé par plusieurs membres.
+    family_members = session.exec(select(Member).where(Member.family_code == member.family_code)).all()
+    liens_to_members = {}
+    for family_member in family_members:
+        if family_member.lien:
+            liens_to_members.setdefault(family_member.lien.strip().lower(), []).append(family_member)
+
+    message_lower = data.message.lower()
+    for lien_label, members_with_lien in liens_to_members.items():
+        if len(members_with_lien) < 2:
+            continue
+
+        # Ajoute le pluriel uniquement si le libellé ne se termine pas déjà par un "s" (ex : "fils").
+        plural_label = lien_label if lien_label.endswith('s') else f'{lien_label}s'
+
+        if lien_label in message_lower or plural_label in message_lower:
+            names = ', '.join(m.name for m in members_with_lien)
+            return {'reply': f"Il y a plusieurs {plural_label} ({names}). Pour qui ?"}
+
+    # Refuse la requête si la clé d'API GitHub Models n'est pas configurée côté serveur.
+    ai_token = os.environ.get('AI_TOKEN')
+    if not ai_token:
+        raise HTTPException(status_code=503, detail="L'assistant IA n'est pas configuré (AI_TOKEN manquant)")
+
+    # Décrit l'outil que le modèle peut appeler pour créer une tâche.
+    tools = [
+        {
+            'type': 'function',
+            'function': {
+                'name': 'ajouter_tache',
+                'description': 'Ajoute une tâche à faire pour un membre de la famille',
+                'parameters': {
+                    'type': 'object',
+                    'properties': {
+                        'titre': {'type': 'string', 'description': 'Le titre de la tâche'},
+                        'personne': {'type': 'string', 'description': 'Le nom du membre à qui assigner la tâche'},
+                    },
+                    'required': ['titre'],
+                },
+            },
+        }
+    ]
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                'https://models.github.ai/inference/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {ai_token}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    'model': 'openai/gpt-4o-mini',
+                    'messages': [{'role': 'user', 'content': data.message}],
+                    'tools': tools,
+                },
+                timeout=30,
+            )
+        except httpx.HTTPError:
+            raise HTTPException(status_code=502, detail="Impossible de contacter l'assistant IA")
+
+    if response.status_code != 200:
+        # Détecte le brownout de retrait de GitHub Models pour renvoyer un message clair plutôt que le JSON brut.
+        error_code = None
+        try:
+            error_code = response.json().get('error', {}).get('code')
+        except ValueError:
+            pass
+
+        if response.status_code == 410 and error_code == 'github_models_retirement_brownout':
+            raise HTTPException(
+                status_code=503,
+                detail="Le service IA (GitHub Models) est temporairement indisponible. Réessayez plus tard.",
+            )
+
+        # Remonte le message d'erreur renvoyé par GitHub Models pour faciliter le diagnostic.
+        raise HTTPException(
+            status_code=502,
+            detail=f"L'assistant IA a renvoyé une erreur ({response.status_code}) : {response.text}",
+        )
+
+    reply_message = response.json()['choices'][0]['message']
+    tool_calls = reply_message.get('tool_calls')
+
+    # Le modèle a choisi d'appeler l'outil ajouter_tache plutôt que de répondre en texte libre.
+    if tool_calls:
+        confirmations = []
+        for tool_call in tool_calls:
+            if tool_call['function']['name'] != 'ajouter_tache':
+                continue
+
+            # Les arguments arrivent sous forme de chaîne JSON, il faut les décoder.
+            arguments = json.loads(tool_call['function']['arguments'])
+            titre = (arguments.get('titre') or '').strip()
+            personne = (arguments.get('personne') or '').strip()
+
+            if not titre:
+                continue
+
+            # Cherche le membre de la famille dont le prénom correspond, sinon assigne au membre connecté.
+            assigned_member = member
+            if personne:
+                family_members = session.exec(
+                    select(Member).where(Member.family_code == member.family_code)
+                ).all()
+                match = next(
+                    (m for m in family_members if m.name.strip().split(' ')[0].lower() == personne.lower()),
+                    None,
+                )
+                if match is not None:
+                    assigned_member = match
+
+            task = Task(title=titre, member_id=assigned_member.id)
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+
+            confirmations.append(f"« {titre} » a été ajoutée pour {assigned_member.name}.")
+
+        reply = ' '.join(confirmations) if confirmations else "Je n'ai pas pu ajouter de tâche."
+        return {'reply': reply}
+
+    return {'reply': reply_message['content']}
