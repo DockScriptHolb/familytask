@@ -24,8 +24,9 @@ services:
         sync: false
 
   # Interface Vue publiée comme site statique.
-  - type: static_site
+  - type: web
     name: familytask-front
+    runtime: static
     rootDir: familytask/frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
