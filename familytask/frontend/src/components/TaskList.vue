@@ -132,9 +132,10 @@ function getTaskIcon(title) {
   <ul v-else class="task-list">
     <li v-for="task in orderedTasks" :key="task.id" class="task-item">
       <div class="task-row" :class="{ 'task-urgent': Boolean(task.urgent) || isDueSoon(task), 'task-mine': isMine(task), 'task-overdue': isOverdue(task) }">
-        <label class="task-line">
-          <!-- On coche la case et on signale à App.vue qu'il faut basculer done. -->
-          <input type="checkbox" :checked="task.done" @change="emit('toggle', task.id)" />
+        <!-- Toute la ligne est cliquable pour basculer la tâche, pas seulement le cercle. -->
+        <div class="task-line" role="button" tabindex="0" @click="emit('toggle', task.id)" @keydown.enter.space.prevent="emit('toggle', task.id)">
+          <!-- La case n'est plus qu'un indicateur visuel, le clic est géré par la ligne entière. -->
+          <input type="checkbox" :checked="task.done" tabindex="-1" style="pointer-events: none" />
 
           <span class="task-content">
             <span class="task-title-line">
@@ -164,10 +165,10 @@ function getTaskIcon(title) {
               validée par {{ getProfileName(task.completedBy) }}
             </span>
           </span>
-        </label>
+        </div>
 
         <!-- On demande la suppression de cette tâche en émettant remove. -->
-        <button class="delete-btn" @click="emit('remove', task.id)">
+        <button class="delete-btn" @click.stop="emit('remove', task.id)">
           🗑️
         </button>
       </div>

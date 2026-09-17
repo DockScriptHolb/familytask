@@ -203,34 +203,34 @@ onMounted(async () => {
               </button>
             </div>
           </div>
-          <input v-model="newTaskDate" type="date" class="task-date-input" aria-label="Date limite pour effectuer la tâche" title="Date limite" />
-          <template v-if="isAdmin && familyMembers.length">
-            <div class="assignee-picker">
-              <button type="button" class="assignee-bubble selected" :title="selectedAssignee?.name" :aria-label="selectedAssignee?.name">
-                <span class="assignee-bubble-initial" :style="{ backgroundColor: avatarColor(selectedAssignee?.name) }">
-                  {{ (selectedAssignee?.name || '?').charAt(0).toUpperCase() }}
+
+          <div class="task-meta-column">
+            <div class="task-meta-group">
+              <input v-model="newTaskDate" type="date" class="task-date-input" aria-label="Date limite pour effectuer la tâche" title="Date limite" />
+            </div>
+
+            <template v-if="isAdmin && familyMembers.length">
+              <div class="assignee-row" role="radiogroup" aria-label="Attribuer à un membre">
+                <button
+                  v-for="familyMember in familyMembers"
+                  :key="familyMember.id"
+                  type="button"
+                  class="assignee-bubble"
+                  :class="{ selected: assigneeId === String(familyMember.id) }"
+                  :title="familyMember.name"
+                  :aria-label="familyMember.name"
+                  role="radio"
+                  :aria-checked="assigneeId === String(familyMember.id)"
+                  @click="assigneeId = String(familyMember.id)"
+                >
+                  <span class="assignee-bubble-initial" :style="{ backgroundColor: avatarColor(familyMember.name) }">
+                    {{ (familyMember.name || '?').charAt(0).toUpperCase() }}
                   </span>
                 </button>
-                <div class="assignee-dropdown" role="radiogroup" aria-label="Attribuer à un membre">
-                  <button
-                    v-for="familyMember in familyMembers"
-                    :key="familyMember.id"
-                    type="button"
-                    class="assignee-bubble"
-                    :class="{ selected: assigneeId === String(familyMember.id) }"
-                    :title="familyMember.name"
-                    :aria-label="familyMember.name"
-                    role="radio"
-                    :aria-checked="assigneeId === String(familyMember.id)"
-                    @click="assigneeId = String(familyMember.id)"
-                  >
-                    <span class="assignee-bubble-initial" :style="{ backgroundColor: avatarColor(familyMember.name) }">
-                      {{ (familyMember.name || '?').charAt(0).toUpperCase() }}
-                    </span>
-                  </button>
-                </div>
               </div>
-          </template>
+            </template>
+          </div>
+
           <button type="button" @click="addTask">Ajouter</button>
         </div>
 

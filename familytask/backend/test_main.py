@@ -1,10 +1,22 @@
+import main
 from fastapi.testclient import TestClient
+from sqlmodel import create_engine
 from uuid import uuid4
+
 
 from main import app
 
 
 client = TestClient(app)
+
+
+def _reset_test_database(tmp_path):
+    db_path = tmp_path / "familytask-test.db"
+    main.database_path = db_path
+    main.sqlite_url = f"sqlite:///{db_path}"
+    main.engine = create_engine(main.sqlite_url, connect_args={"check_same_thread": False})
+    main.create_db_and_tables()
+    return db_path
 
 
 def create_account():
@@ -91,6 +103,11 @@ def test_authentication_flow():
     assert expired_response.status_code == 401
 
 
+def test_list_tasks_requires_a_valid_bearer_token():
+    response = client.get("/api/tasks")
+    assert response.status_code == 401
+
+
 def test_create_and_list_tasks():
     member, headers = create_account()
 
@@ -113,6 +130,44 @@ def test_create_and_list_tasks():
     assert response.status_code == 200
     tasks = response.json()
     assert any(task["title"] == "Sortir les poubelles" for task in tasks)
+
+
+def test_signup_create_task_and_list_it_on_sqlite_test_db(tmp_path):
+    _reset_test_database(tmp_path)
+
+    with TestClient(main.app) as test_client:
+        signup_payload = {
+            "email": f"test-{uuid4().hex}@example.com",
+            "password": "mot-de-passe-solide",
+            "name": "Camille",
+            "family": "Les Dupont",
+            "lien": "parent",
+        }
+
+        signup_response = test_client.post("/api/signup", json=signup_payload)
+        assert signup_response.status_code == 200
+        signup_data = signup_response.json()
+
+        token = signup_data["token"]
+        member_id = signup_data["member"]["id"]
+
+        task_response = test_client.post(
+            "/api/tasks",
+            params={"title": "Faire les courses"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert task_response.status_code == 200
+        created_task = task_response.json()
+        assert created_task["title"] == "Faire les courses"
+        assert created_task["member_id"] == member_id
+
+        tasks_response = test_client.get(
+            "/api/tasks",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert tasks_response.status_code == 200
+        tasks = tasks_response.json()
+        assert any(task["title"] == "Faire les courses" for task in tasks)
 
 
 def test_toggle_and_delete_task():
