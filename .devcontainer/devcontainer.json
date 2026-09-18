@@ -38,7 +38,8 @@
   "portsAttributes": {
     "5173": {
       "label": "FamilyTask (le site)",
-      "onAutoForward": "notify"
+      "onAutoForward": "notify",
+      "visibility": "public"
     },
     "8000": {
       "label": "API (le back-end)",

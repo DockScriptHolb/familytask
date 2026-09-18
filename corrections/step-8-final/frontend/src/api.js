@@ -1,7 +1,14 @@
 // Adresse du back. En local : vide (le proxy Vite gère /api).
 // En ligne : Render fournit VITE_API_URL au moment du build.
-let base = import.meta.env.VITE_API_URL || ''
-if (base && !base.startsWith('http')) base = 'https://' + base
+function normalizeApiBaseUrl(value) {
+  const base = value.trim().replace(/\/+$/, '')
+  if (!base) return ''
+  if (/^https?:\/\//i.test(base)) return base
+  if (base.includes('.') || base.startsWith('localhost')) return `https://${base}`
+  return `https://${base}.onrender.com`
+}
+
+const base = normalizeApiBaseUrl(import.meta.env.VITE_API_URL || '')
 export const API = base
 
 // --- Session : jeton + membre connecté (gardés en localStorage) ---

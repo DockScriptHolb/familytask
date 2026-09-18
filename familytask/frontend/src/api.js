@@ -1,7 +1,18 @@
 // Centralise les appels à l'API pour toujours envoyer le token de session.
 
-// Adresse du backend fournie au build (Render, etc.) ; vide en local pour utiliser le proxy Vite.
-const API_BASE_URL = import.meta.env.VITE_API_URL || ''
+// Adresse du backend fournie par Vite ; une chaîne vide active le proxy local.
+const API_URL = import.meta.env.VITE_API_URL || ''
+
+// Complète l'adresse Render si elle est fournie sans protocole.
+function normalizeApiBaseUrl(value) {
+  const base = value.trim().replace(/\/+$/, '')
+  if (!base) return ''
+  if (/^https?:\/\//i.test(base)) return base
+  if (base.includes('.') || base.startsWith('localhost')) return `https://${base}`
+  return `https://${base}.onrender.com`
+}
+
+const API_BASE_URL = normalizeApiBaseUrl(API_URL)
 
 export function getToken() {
   return localStorage.getItem('token')
